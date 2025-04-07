@@ -1,0 +1,1 @@
+# akcje-Coca-Coli-1962-2021-

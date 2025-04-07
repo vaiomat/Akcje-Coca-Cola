@@ -1,0 +1,757 @@
+---
+title: "Analiza danych dotyczących cen akcji firmy Coca-Cola"
+author: "Mateusz Stegliński"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+
+```{r}
+library(fpp3)
+library(tseries)
+library(forecast)
+```
+
+# Wstępna analiza danych
+
+W projekcie zajmiemy się analizą zbioru danych dotyczących ceny akcji marki Coca-Cola od 2 stycznia 1962 do 17 grudnia 2021 roku. Sesje giełdowe odbywają się od poniedziałku do piątku z pominięciem dni wolnych. Dane są ogólnodostępne na stronie kaggle.com (https://www.kaggle.com/datasets/meetnagadia/coco-cola-stock-data-19622021).
+
+```{r}
+COCA_COLA <- read.csv("COCO COLA.csv")
+head(COCA_COLA)
+```
+
+
+Do analizy i prognozy będziemy używać kolumny "Close" która zawiera ceny zamknięcia, czyli ostatnią cenę sprzedaży w każdym dniu. 
+Sprawdzamy, czy w danych są wartości NA.
+
+```{r}
+sum(is.na(COCA_COLA))
+```
+
+W danych nie znajdują się wartości NA, więc przerabiamy tabelę, aby zostały w niej tylko interesujące nas kolumny. Zamienimy również format kolumny "Date", aby był ustawiony na "date", a nie "chr". Użyjemy do tego komend "select" oraz "mutate" z pakietu "dplyr".
+
+```{r}
+kolka <- select(COCA_COLA, Date, Close)
+kolka <- kolka %>% mutate(Date = as.Date(Date, format = "%Y-%m-%d"))
+head(kolka)
+```
+
+
+Z danych w tabeli "kolka" tworzymy szeregi czasowe na 2 sposoby.
+
+Pierwszy za pomocą funkcji "ts". Ustawiamy w niej początek szeregu na 1962 rok, 2 dzień w roku i dzielimy rok na 252 dni (frequency = 252), czyli liczbę dni roboczych w roku.
+
+Drugi szereg wygenerujemy w postaci tsibble za pomocą komendy "as_tsibble" z pakietu "tsibble", który jest wgrany do pakietu "fpp3". Pozwala nam ona na zorganizowanie szeregu czasowego w postaci tabeli.
+
+Zaletą pierwszej funkcji jest prostota analizy szeregu, ale nie zachowuje ona dokładnej struktury danych (liczba dni w roku zostaje taka sama, ale nie uwzględnia ona przerw spowodowanych dniami wolnymi). Szereg czasowy wygenerowany drugą metodą pozwala na zachowanie struktury danych, ale jest o wiele trudniejszy do analizowania pod względem ilości kodu.
+
+Porównamy obie metody, aby upewnić się, że szereg czasowy zachowa swoje własności (data rozpoczęcia, zakończenia szeregu, długość).
+
+```{r}
+tskolka <- ts(COCA_COLA$Close, start = c(1962, 2), frequency = 252)
+head(tskolka,1)
+
+tskolka_tsibble <- as_tsibble(kolka, index = Date)
+head(tskolka_tsibble,1)
+
+
+cat(if (length(tskolka) == length(tskolka_tsibble$Date)) {"\nSzeregi czasowe są tej samej długości."})
+```
+
+Szeregi czasowe wygenerowane wymienionymi sposobami zaczynają się w tym samym dniu i mają tą samą długość.
+
+Przedstawimy oba szeregi czasowe na wykresach. Używamy do tego funkcji "autoplot" (jest dostępna w pakietach "forecast" i "ggplot2").
+
+```{r}
+autoplot(tskolka) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Szereg wygenerowany przez 'ts'")
+autoplot(tskolka_tsibble, vars(Close)) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Szereg wygenerowany przez 'tsibble'")
+```
+
+Na wykresach widać, że szeregi również kończą się w tych samych momentach, więc ramy czasowe zostały zachowane w obu przypadkach.
+
+Możemy zaobserwować niewielkie różnice pomiędzy wykresami. Wynikają one z faktu, że "tsibble" zachowuje odstępy spowodowane dniami wolnymi. Szereg wygenerowany metodą "ts" nie rozróżnia dni wolnych od dni roboczych, przez co dane są bardziej wygładzone.
+
+Od tego momentu na potrzeby projektu, będziemy działać tylko na "ts", ponieważ kod dla szeregu wygenerowanego przy pomocy komendy "ts" jest łatwiejszy.
+
+Ponieważ zbiór zawiera dużą liczbę danych, podzielimy szereg na 4 części w następujący sposób:
+
+```{r}
+tskolka1 <- ts(COCA_COLA$Close[0:7586], start = c(1962, 2), frequency = 252)
+tskolka2 <- ts(COCA_COLA$Close[7587:8175], start = c(1992,28), frequency = 252)
+tskolka3 <- ts(COCA_COLA$Close[8176:8928], start = c(1994,113), frequency = 252)
+tskolka4 <- ts(COCA_COLA$Close[8929:15096], start = c(1997,110), frequency = 252)
+
+autoplot(tskolka1) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + geom_line(data = tskolka2, color = "red") + geom_line(data = tskolka3, color = "green") + geom_line(data = tskolka4, color = "blue") + ggtitle("Podział szeregu")
+```
+
+Pierwszy okres (czarny), od 1962 do 1992, charakteryzuje się początkowo powolnym wzrostem. Jego szybki skok można uzasadnić poprzez zmiany technologiczne, ekspansje na rynki globalne oraz rozwój międzynarodowych korporacji.
+
+Okres drugi (czerwony), od 1992 do 1994, jest okresem przejściowym, w którym przez dłuższy okres ceny utrzymywały się na podobnym poziomie, co może mieć związek z przystosowywaniem się firmy do nowych wyzwań.
+
+W trzecim okresie (zielonym), od 1994 do 1997, szybki wzrost najprawdopodobniej jest wynikiem intensywnej ekspansji na nowe rynki oraz sukcesu nowych produktów i korzystnych warunków na rynkach finansowych.
+
+Ostatni okres (niebieski), od 1997 do 2021, charakteryzuje się początkowym spadkiem do około 2005 roku, w którym ceny akcji ponownie zaczęły rosnąć. Dalej ceny akcji odzwierciedlają wydarzenia globalne, takie jak kryzys finansowy w 2008 roku, kiedy ceny gwałtownie spadły. Gdy sytuacja na rynku ustabilizowała się ceny akcji ponownie zaczęły rosnąć. Wartym odnotowania jest również gwałtowny spadek cen akcji w 2020 roku spowodowany prawdopodobnie pandemią COVID-19.
+
+W pierwszych trzech częściach skupimy się na dekompozycji na potencjalny trend, sezonowość i część stacjonarną. W czwartej części dodatkowo dopasujemy odpowiedni model i przeprowadzimy na nim prognozę.
+
+## Analiza pierwszej części szeregu (lata 1962-1992)
+
+```{r}
+autoplot(tskolka1) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Pierwsza część szeregu")
+n1 <- length(tskolka1)
+```
+
+### Badanie stacjonarności szeregu
+
+Szeregi stacjonarne to szeregi, w których nie występują trendy, efekty cykliczne lub sezonowe oraz zmienność (wariancja) jest jednorodna w czasie. Pomijamy formalną definicję.
+
+Wykres sugeruje brak stacjonarności. 
+Upewnimy się, czy szereg jest stacjonarny przy pomocy kilku kryteriów. Na początku przeanalizujemy wykresy funkcji "acf" i "pacf".
+
+Funkcja autokorelacji (acf). Przy przesunięciu k jest to korelacja między wartościami szeregu oddalonymi o k przedziałów od siebie.
+
+Funkcja autokorelacji cząstkowej (pacf). Przy przesunięciu k jest to korelacja między wartościami szeregu oddalonymi o k przedziałów od siebie, z jednoczesną rejestracją wartości z przedziałów znajdujących się pomiędzy.
+
+Na osi x jedynka oznacza jeden rok, czyli 252 obserwacje.
+
+```{r}
+plot(acf(tskolka1, plot = F, lag.max = 252), main = "ACF dla pierwszej części szeregu")
+plot(pacf(tskolka1, plot = F), main = "PACF dla pierwszej części szeregu")
+```
+
+Wartości funkcji acf powoli maleją do zera, co może świadczyć o obecności trendu w danych oraz braku stacjonarności.
+Wydaje się, że w szeregu występuje sezonowość, lecz próby analizy szeregu z potencjalną sezonowością dawały gorsze wyniki niż te bez sezonowości, zatem pomijamy ją w dalszej analizie.
+
+Sprawdzimy teraz czy szereg ma stałą średnią za pomocą średniej ruchomej. W najprostszym wariancie definiuje się szereg
+$$
+\hat{m}_t=\frac{1}{2q+1}\sum_{j=-q}^qY_{t-j}
+$$
+Użyjemy do tego funkcji "filter" z pakietu "stats". Przyjmujemy wagę na 253, czyli rok plus jeden.
+
+```{r}
+tskolka1.SR <- stats::filter(tskolka1, filter = rep(1,253)/253)
+autoplot(tskolka1.SR) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Średnia ruchoma dla pierwszej części szeregu")
+```
+
+Widzimy, że w późniejszych latach średnia gwałtownie wzrasta. Szereg nie ma stałej średniej, co również sugeruje brak stacjonarności.
+
+Sprawdzimy, czy szereg ma stałą wariancję, analizując wariancję ruchomą.
+
+```{r}
+vk1=rep(0,n1-252)
+for (t in (1:(n1-252))) vk1[t] <- var(tskolka1[t:(t+252)])
+plot(vk1, type="l", xlab = "Indeksy", ylab = "Wariancja ruchoma", main = "Wariancja ruchoma dla pierwszej części szeregu")
+```
+
+Widzimy że wariancja również nie jest stała, co świadczy o braku stacjonarności.
+
+Na koniec przeprowadzimy test kpss za pomocą funkcji "kpss.test" z pakietu "tseries". Jest to test stacjonarności, którego hipoteza zerowa to, że szereg jest stacjonarny lub stacjonarny z trendem, gdy parametr null = "Trend".
+
+```{r}
+kpss.test(tskolka1)
+```
+
+p-value < 0.05, zatem "kpss.test" również sugeruje brak stacjonarności. Ostatecznie uznajemy, że szereg nie jest stacjonarny. 
+
+Ponieważ wariancja szeregu nie jest stała użyjemy transformacji Boxa-Coxa z lambdą równą 0. Skorzystamy z funkcji "BoxCox" z pakietu "forecast". Transformacja wykładnicza Boxa-Coxa to rodzina transformacji:
+
+$$
+f_\lambda(x)=\left\{\begin{array}{ccc}\frac{x^\lambda-1}{\lambda}&dla&\lambda\neq 0\\\ln(x)&dla&\lambda=0\end{array}\right.
+$$
+
+```{r}
+tskolka1.BC <- BoxCox(tskolka1, 0)
+autoplot(tskolka1.BC) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Szereg po transformacji")
+```
+
+Sprawdzimy ponownie wariancję ruchomą, tym razem dla szeregu po transformacji.
+
+```{r}
+vk1t=rep(0,n1-252)
+for (t in (1:(n1-252))) vk1t[t] <- var(tskolka1.BC[t:(t+252)])
+plot(vk1t, type="l", xlab = "Indeksy", ylab = "Wariancja ruchoma", main = "Wariancja ruchoma dla pierwszej części szeregu po transformacji")
+```
+
+Różnice w wariancji są znacznie mniejsze. Przed transformacją wynosiły około 1.2, a po zaledwie około 0.1.
+
+### Badanie trendu i sezonowości
+
+Na początku wyodrębnimy trend przy pomocy średniej ruchomej. Za pomocą "geom_line" z pakietu "ggplot2" nanosimy trend na wykres. Ustawiamy kolor lini trendu na czerwony, a typ lini na przerywany.
+
+```{r}
+tskolka1.T <- stats::filter(tskolka1.BC, filter = rep(1,253)/253)
+autoplot(tskolka1.BC) + xlab("Lata") + ylab("Cena zamknięcia (USD)")+ ggtitle("Szereg po transformacji z naniesionym trendem") + geom_line(data = tskolka1.T, color = "red", linetype = 5, linewidth = 1)
+```
+
+Odejmujemy otrzymany trend od szeregu po transformacji, dzięki czemu otrzymujemy szereg postaci reszty + potencjalna sezonowość.
+Założyliśmy, że w szeregu nie występuje sezonowość, więc teraz sprawdzimy, czy po odjęciu trendu zostaje szereg stacjonarny.
+
+W zwróconym trendzie, pierwsze i ostatnie q wartości to NA, gdyż pierwszą wartością którą możemy wyliczyć jest $\hat{m}_{q+1}$, a ostatnią $m_{n-q}$.
+
+```{r}
+reszty1 <- tskolka1.BC[127:(n1-126)] - tskolka1.T[127:(n1-126)]
+reszty1 <- ts(reszty1, start = c(1962, 127), frequency = 252)
+
+autoplot(reszty1, main = "Reszty pierwszej części szeregu", xlab = "Lata", ylab = "Wartości")
+```
+
+Przystąpimy teraz do analizy stacjonarności reszt. Najpierw przeanalizujemy wykresy funkcji "acf" i "pacf".
+
+```{r}
+plot(acf(reszty1, plot = F, lag.max = 252), main = "ACF dla reszt pierwszej części szeregu")
+plot(pacf(reszty1, plot = F), main = "PACF dla reszt pierwszej części szeregu")
+```
+
+Wartości funkcji acf nie zanikają szybko do zera, lecz szybciej niż w przypadku oryginalnego szeregu, co sugeruje brak stacjonarności. Przeprowadzimy teraz test kpss.
+
+```{r}
+kpss.test(reszty1)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt wyodrębnionych przy pomocy funkcji "filter". O ile test kpss nie daje podstaw do odrzucenia hipotezy o stacjonarności, to analiza funkcji "acf" nie daje podobnych wniosków. Może się tak dziać, ponieważ szereg zawiera bardzo dużo danych. Próbowaliśmy zniwelować te efekty dzieląc szereg na 4 części, widać jednak, że pewne problemy pozostają. Prawdopodobnie dzieje się tak, ponieważ usuwając trend ręcznie przy pomocy średniej ruchomej w resztach obecne są pozostałości trendu.
+
+```{r}
+autoplot(stats::filter(reszty1, filter = rep(1,253)/253), col = "red") + xlab("Ideksy") + ylab("Wartości") + ggtitle("Pozostałości trendu w resztach")
+```
+
+Ponieważ przypuszczamy, że w tym przypadku w resztach obecne są pozostałości trendu, przystąpimy teraz do innej metody wyodrębnienia reszt przy pomocy jednokrotnego różnicowania.
+
+```{r}
+reszty1d <- diff(tskolka1.BC)
+
+autoplot(reszty1d, main = "Reszty wyodrębnione metodą jednokrotnego różnicowania") + xlab("Lata") + ylab("Wartości")
+```
+
+```{r}
+plot(acf(reszty1d, plot = F, lag.max = 252), main = "ACF dla reszt pierwszej części szeregu (jednokrotne różnicowanie)")
+plot(pacf(reszty1d, plot = F), main = "PACF dla reszt pierwszej części szeregu (jednokrotne różnicowanie)")
+```
+
+Wartości funkcji acf zanikają szybciej do zera. Oznacza to, że analiza stacjonarności reszt korzystając z funkcji "acf" sugeruje stacjonarność reszt (wyodrębnionych przy pomocy różnicowania).
+
+Sprawdzimy jeszcze stacjonarność reszt testem "kpss.test".
+
+```{r}
+kpss.test(reszty1d)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt wyodrębnionych przy pomocy jednokrotnego różnicowania. W tym przypadku kpss test oraz analiza funkcji "acf" dają takie same wnioski, zatem ostatecznie uznajemy szereg reszt za stacjonarny.
+
+
+## Analiza drugiej części szeregu (lata 1992-1994)
+
+
+```{r}
+autoplot(tskolka2) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Druga część szeregu")
+n2 <- length(tskolka2)
+```
+
+### Badanie stacjonarności szeregu
+
+Wykres nie sugeruje jednoznacznie braku stacjonarności.
+Sprawdzamy, czy szereg jest stacjonarny analizując wykresy funkcji "acf" i "pacf".
+
+```{r}
+plot(acf(tskolka2, plot = F, lag.max = 252), main = "ACF dla drugiej części szeregu")
+plot(pacf(tskolka2, plot = F), main = "PACF dla drugiej części szeregu")
+```
+
+Wartości funkcji acf powoli, lecz szybciej niż w pozostałych przypadkach, maleją do zera i nie wygłuszają się, co może świadczyć o obecności trendu w danych oraz braku stacjonarności. 
+
+Sprawdzimy teraz czy szereg ma stałą średnią za pomocą średniej ruchomej. Ponieważ druga część szeregu obejmuje tylko dwa lata, wagę średniej ruchomej ustawimy na 127 czyli połowa roku plus jeden.
+
+```{r}
+tskolka2.SR <- stats::filter(tskolka2, filter = rep(1,127)/127)
+autoplot(tskolka2.SR) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Średnia ruchoma dla drugiej części szeregu")
+```
+
+Widzimy, że średnia szeregu zmienia się w czasie, lecz różnica między najmniejszą i największą średnią to zaledwie 0.5, przez co trudno jednoznacznie stwierdzić stacjonarność szeregu lub jej brak.
+
+Sprawdzimy, czy szereg ma stałą wariancję, analizując wariancję ruchomą.
+
+```{r}
+vk2=rep(0,n2-126)
+for (t in (1:(n2-126))) vk2[t]<-var(tskolka2[t:(t+126)])
+plot(vk2, type="l", xlab = "Indeksy", ylab = "Wariancja ruchoma", main = "Wariancja ruchoma dla drugiej części szeregu")
+```
+
+Widzimy, że wahania wariancji również są na niskim poziomie (około 0.15), lecz są one obecne, więc ponownie trudno stwierdzić, czy szereg jest stacjonarny czy nie.
+
+Po przeprowadzeniu transformacji szereg czasowy nie zmieniał się znacząco, a różnice wariancji pozostawały na tym samym poziomie, dlatego w tym przypadku zdecydowaliśmy się na pominięcie transformacji.
+
+Na koniec przeprowadzimy test kpss.
+
+```{r}
+kpss.test(tskolka2)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt.
+Ostatecznie nie możemy stwierdzić, czy szereg faktycznie jest stacjonarny czy nie.
+Do dalszej analizy, biorąc pod uwagę wykres funkcji "acf", zakładamy brak stacjonarności szeregu.
+
+### Badanie trendu i sezonowość:
+
+Spróbujemy usunąć ewentualny trend z danych i przeanalizujemy ponownie zachowanie uzyskanego szeregu, dzięki czemu możemy otrzymać pewniejsze wyniki analizy stacjonarności.
+
+```{r}
+autoplot(tskolka2) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + geom_line(data = tskolka2.SR, color = "red", linetype = 5, linewidth = 1) + ggtitle("Szereg z naniesionym trendem")
+```
+
+```{r}
+reszty2 <- tskolka2[64:(n2-63)] - tskolka2.SR[64:(n2-63)]
+reszty2 <- ts(reszty2, start = c(1992, 92), frequency = 252)
+
+autoplot(reszty2, main = "Reszty drugiej części szeregu", xlab = "Lata", ylab = "Wartości")
+```
+
+Przystąpimy teraz do analizy stacjonarności reszt. Najpierw przeanalizujemy wykresy funkcji "acf" i "pacf".
+
+```{r}
+plot(acf(reszty2, plot = F, lag.max = 252), main = "ACF dla reszt drugiej części szeregu")
+plot(pacf(reszty2, plot = F), main = "PACF dla reszt drugiej części szeregu")
+```
+
+Wartości funkcji acf zanikają szybciej do zera, ale dalej nie wygłuszają się dla większych opóźnień. Oznacza to, że analiza stacjonarności reszt korzystając z funkcji "acf", ponownie sugeruje brak stacjonarności reszt (obecność trendu).
+
+Sprawdzimy jeszcze stacjonarność reszt testem "kpss.test".
+
+```{r}
+kpss.test(reszty2)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt. 
+Ostatecznie dostaliśmy podobne wnioski co w przypadku przed usunięciem potencjalnego trendu, zatem mogliśmy uznać stacjonarność drugiej części szeregu.
+
+Przystąpimy teraz do innej metody wyodrębnienia reszt przy pomocy jednokrotnego różnicowania, aby sprawdzić, czy dostaniemy pewniejsze wyniki odnośnie stacjonarności.
+
+```{r}
+reszty2d <- diff(tskolka2)
+
+autoplot(reszty2d, main = "Reszty wyodrębnione metodą jednokrotnego różnicowania") + xlab("Lata") + ylab("Wartości")
+```
+
+```{r}
+plot(acf(reszty2d, plot = F, lag.max = 252), main = "ACF dla reszt drugiej części szeregu (jednokrotne różnicowanie)")
+plot(pacf(reszty2d, plot = F), main = "PACF dla reszt drugiej części szeregu (jednokrotne różnicowanie)")
+```
+
+Wartości funkcji acf zanikają szybciej do zera. Oznacza to, że analiza stacjonarności reszt korzystając z funkcji "acf" sugeruje stacjonarność reszt (wyodrębnionych przy pomocy różnicowania).
+
+Sprawdzimy jeszcze stacjonarność reszt testem "kpss.test".
+
+```{r}
+kpss.test(reszty2d)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt wyodrębnionych przy pomocy jednokrotnego różnicowania. W tym przypadku kpss test oraz analiza funkcji "acf" dają takie same wnioski, zatem ostatecznie uznajemy szereg reszt za stacjonarny.
+
+
+## Analiza trzeciej części szeregu (lata 1994-1997)
+
+```{r}
+autoplot(tskolka3) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Trzecia część szeregu")
+n3 <- length(tskolka3)
+```
+
+### Badanie stacjonarności szeregu
+
+Wykres sugeruje brak stacjonarności. 
+Upewnimy się, czy szereg jest stacjonarny przy pomocy kilku kryteriów. Na początku przeanalizujemy wykresy funkcji acf i pacf.
+
+```{r}
+plot(acf(tskolka3, plot = F, lag.max = 252), main = "ACF dla trzeciej części szeregu")
+plot(pacf(tskolka3, plot = F), main = "PACF dla trzeciej części szeregu")
+```
+
+Wartości funkcji acf powoli maleją do zera, co może świadczyć o braku stacjonarności oraz obecności trendu w danych. 
+Wydaje się, że w szeregu występuje sezonowość, lecz próby analizy szeregu z potencjalną sezonowością dawały gorsze wyniki niż te bez sezonowości, zatem pomijamy ją w dalszej analizie.
+
+Sprawdzimy teraz czy szereg ma stałą średnią za pomocą średniej ruchomej.
+
+```{r}
+tskolka3.SR <- stats::filter(tskolka3, filter = rep(1,253)/253)
+autoplot(tskolka3.SR) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Średnia ruchoma dla trzeciej części szeregu")
+```
+
+Widzimy, że średnia wzrasta liniowo, co również sugeruje brak stacjonarności.
+
+Sprawdzimy czy szereg ma stałą wariancję.
+
+```{r}
+vk3=rep(0,n3-252)
+for (t in (1:(n3-252))) vk3[t]<-var(tskolka3[t:(t+252)])
+plot(vk3, type="l", xlab = "Indeksy", ylab = "Wariancja ruchoma", main = "Wariancja ruchoma dla trzeciej części szeregu")
+```
+
+Widzimy że wariancja również nie jest stała, co świadczy o braku stacjonarności.
+
+Na koniec przeprowadzimy test kpss, który upewni nas, że szereg nie jest stacjonarny.
+
+```{r}
+kpss.test(tskolka3)
+```
+
+p-value < 0.05, zatem "kpss.test" również sugeruje brak stacjonarności. Ostatecznie uznajemy że szereg nie jest stacjonarny. 
+
+Ponieważ wariancja szeregu nie jest stała użyjemy transformacji Boxa-Coxa z lambdą równą 0, czyli dane zostaną zlogarytmowane.
+
+```{r}
+tskolka3.BC <- BoxCox(tskolka3, 0)
+autoplot(tskolka3.BC) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Szereg po transformacji")
+```
+
+Sprawdzimy, czy wariancja jest bardziej stała, niż przed transformacją.
+
+```{r}
+vk3t=rep(0,n3-252)
+for (t in (1:(n3-252))) vk3t[t]<-var(tskolka3.BC[t:(t+252)])
+plot(vk3t, type="l", xlab = "Indeksy", ylab = "Wariancja ruchoma", main = "Wariancja ruchoma dla trzeciej części szeregu po transformacji")
+```
+
+Wariancja ustabilizowała się po transformacji. Różnice zmalały z prawie 8 do 0.06.
+
+### Badanie trendu i sezonowości
+
+Na początku wyodrębnimy trend przy pomocy średniej ruchomej.
+
+```{r}
+tskolka3.T <- stats::filter(tskolka3.BC, filter = rep(1,253)/253)
+
+autoplot(tskolka3.BC) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Szereg po transformacji z naniesionym trendem") + geom_line(data = tskolka3.T, color = "red", linetype = 5, linewidth = 1)
+```
+
+Odejmujemy otrzymany trend od szeregu po transformacji, dzięki czemu otrzymujemy szereg postaci reszty + potencjalna sezonowość.
+Założyliśmy, że w szeregu nie występuje sezonowość, więc teraz sprawdzimy czy po odjęciu trendu zostaje szereg stacjonarny 
+
+```{r}
+reszty3 <- tskolka3.BC[127:(n3-126)] - tskolka3.T[127:(n3-126)]
+reszty3 <- ts(reszty3, start = c(1994, 240), frequency = 252)
+
+autoplot(reszty3, xlab = "Lata", ylab = "Wartości", main = "Reszty")
+```
+
+Przystąpimy teraz do analizy stacjonarności reszt. Najpierw przeanalizujemy wykresy funkcji acf i pacf.
+
+```{r}
+plot(acf(reszty3, plot = F, lag.max = 252), main = "ACF dla reszt trzeciej części szeregu")
+plot(pacf(reszty3, plot = F), main = "PACF dla reszt trzeciej części szeregu")
+```
+
+Wartości funkcji acf nie zanikają szybko do zera i nie wygłuszają się dla większych opóźnień, co sugeruje obecność trendu. Prawdopodobnie dzieje się tak, ponieważ usuwając trend ręcznie przy pomocy średniej ruchomej w resztach obecne są pozostałości trendu.
+
+Sprawdzimy jeszcze stacjonarność reszt testem "kpss.test".
+
+```{r}
+kpss.test(reszty3)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt. O ile test kpss nie daje podstaw do odrzucenia hipotezy o stacjonarności, to analiza funkcji "acf" nie daje podobnych wniosków. Może się tak dziać, ponieważ szereg zawiera bardzo dużo danych. Próbowaliśmy zniwelować te efekty dzieląc szereg na 4 części, widać jednak, że pewne problemy pozostają.
+
+Dlatego przystąpimy teraz do innej metody wyodrębnienia reszt przy pomocy jednokrotnego różnicowania.
+
+```{r}
+reszty3d <- diff(tskolka3.BC)
+
+autoplot(reszty3d, main = "Reszty wyodrębnione metodą jednokrotnego różnicowania") + xlab("Lata") + ylab("Wartości")
+```
+
+```{r}
+plot(acf(reszty3d, plot = F, lag.max = 252), main = "ACF dla reszt trzeciej części szeregu (jednokrotne różnicowanie)")
+plot(pacf(reszty3d, plot = F), main = "PACF dla reszt trzeciej części szeregu (jednokrotne różnicowanie)")
+```
+
+Wartości funkcji acf zanikają szybciej do zera. Oznacza to, że analiza stacjonarności reszt korzystając z funkcji "acf" sugeruje stacjonarność reszt (wyodrębnionych przy pomocy różnicowania).
+
+Sprawdzimy jeszcze stacjonarność reszt testem "kpss.test".
+
+```{r}
+kpss.test(reszty3d)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt wyodrębnionych przy pomocy jednokrotnego różnicowania. W tym przypadku kpss test oraz analiza funkcji "acf" daje takie same wnioski, zatem ostatecznie uznajemy szereg reszt za stacjonarny.
+
+
+## Analiza czwartej części szeregu (lata 1997-2021)
+
+```{r}
+autoplot(tskolka4) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Czwarta część szeregu")
+n4 <- length(tskolka4)
+```
+
+### Badanie stacjonarności szeregu
+
+Wykres sugeruje brak stacjonarności. 
+Upewnimy się, czy szereg jest stacjonarny przy pomocy kilku kryteriów. Na początku przeanalizujemy wykresy funkcji acf i pacf.
+
+```{r}
+plot(acf(tskolka4, plot = F, lag.max = 252), main = "ACF dla czwartej części szeregu")
+plot(pacf(tskolka4, plot = F), main = "PACF dla czwartej części szeregu")
+```
+
+Wartości funkcji acf powoli maleją do zera, co może świadczyć o obecności trendu w danych oraz braku stacjonarności. 
+
+Sprawdzimy teraz czy szereg ma stałą średnią za pomocą średniej ruchomej.
+
+```{r}
+tskolka4.SR <- stats::filter(tskolka4, filter = rep(1,253)/253) 
+autoplot(tskolka4.SR) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Średnia ruchoma dla czwartej części szeregu")
+```
+
+Widzimy, że średnia na początku maleje, a w połowie zaczyna rosnąć. Szereg nie ma stałej średniej, co również sugeruje brak stacjonarności.
+
+Sprawdzimy, czy szereg ma stałą wariancję, analizując wariancję ruchomą.
+
+```{r}
+vk4=rep(0,n4-252)
+for (t in (1:(n4-252))) vk4[t]<-var(tskolka4[t:(t+252)])
+plot(vk4, type="l", xlab = "Indeksy", ylab = "Wariancja ruchoma", main = "Wariancja ruchoma dla czwartej części szeregu")
+```
+
+Widzimy, że wariancja również nie jest stała, co świadczy o braku stacjonarności.
+
+Na koniec przeprowadzimy test kpss.
+
+```{r}
+kpss.test(tskolka4)
+```
+
+p-value < 0.05, zatem "kpss.test" również sugeruje brak stacjonarności. Ostatecznie uznajemy, że szereg nie jest stacjonarny. 
+
+Ponieważ wariancja szeregu nie jest stała użyjemy transformacji Boxa-Coxa z lambdą równą 0, czyli dane zostaną zlogarytmowane.
+
+```{r}
+tskolka4.BC <- BoxCox(tskolka4, 0)
+autoplot(tskolka4.BC) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Szereg po transformacji")
+```
+
+Sprawdzimy, czy wariancja jest bardziej stała po transformacji szeregu.
+
+```{r}
+vk4t=rep(0,n4-252)
+for (t in (1:(n4-252))) vk4t[t]<-var(tskolka4.BC[t:(t+252)])
+plot(vk4t, type="l", xlab = "Indeksy", ylab = "Wariancja ruchoma", main = "Wariancja ruchoma dla czwartej części szeregu po transformacji")
+```
+
+Wariancja jest bardziej stała po transformacji. Różnice zmalały z około 24 do 0.015.
+
+### Badanie trendu i sezonowości
+
+Na początku wyodrębnimy trend przy pomocy średniej ruchomej.
+
+```{r}
+tskolka4_T <- stats::filter(tskolka4.BC, filter = rep(1,253)/253)
+
+autoplot(tskolka4.BC) + geom_line(data = tskolka4_T, color = "red", linetype = 5, linewidth = 1) + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Szereg po transformacji z naniesionym trendem")
+```
+
+Odejmujemy otrzymany trend od szeregu po transformacji, dzięki czemu otrzymujemy szereg postaci reszty + potencjalna sezonowość.
+Wydaje się, że po 2013 roku w szeregu występuje sezonowość, lecz próby dobierania modelu z sezonowością dawały gorsze wyniki niż te bez sezonowości.
+Sprawdzimy więc, czy po odjęciu trendu zostaje szereg stacjonarny.
+
+
+```{r}
+reszty4 <- tskolka4.BC[127:(n4-126)] - tskolka4_T[127:(n4-126)]
+reszty4 <- ts(reszty4, start = c(1997, 237), frequency = 252)
+
+autoplot(reszty4, xlab = "Lata", ylab = "Wartości", main = "Reszty")
+```
+
+Przystąpimy teraz do analizy stacjonarności reszt. Najpierw przeanalizujemy wykresy funkcji acf i pacf.
+
+```{r}
+plot(acf(reszty4, plot = F, lag.max = 252), main = "ACF dla reszt czwartej części szeregu")
+plot(pacf(reszty4, plot = F), main = "PACF dla reszt czwartej części szeregu")
+```
+
+Wartości funkcji acf nie zanikają szybko do zera i nie wygłuszają się dla większych opóźnień, co sugeruje obecność trendu. Dzieje się tak, ponieważ usuwając trend ręcznie przy pomocy średniej ruchomej w resztach obecne są pozostałości trendu.
+
+Sprawdzimy jeszcze stacjonarność reszt testem "kpss.test".
+
+```{r}
+kpss.test(reszty4)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt. O ile test kpss nie daje podstaw do odrzucenia hipotezy o stacjonarności, to analiza funkcji "acf" nie daje podobnych wniosków. Może się tak dziać, ponieważ szereg zawiera bardzo dużo danych. Próbowaliśmy zniwelować te efekty dzieląc szereg na 4 części, widać jednak, że pewne problemy pozostają.
+
+Dlatego przystąpimy teraz do innej metody wyodrębnienia reszt przy pomocy jednokrotnego różnicowania.
+
+```{r}
+reszty4d <- diff(tskolka4.BC)
+
+autoplot(reszty4d, main = "Reszty wyodrębnione metodą jednokrotnego różnicowania") + xlab("Lata") + ylab("Wartości")
+```
+
+```{r}
+plot(acf(reszty4d, plot = F, lag.max = 252), main = "ACF dla reszt czwartej części szeregu (jednokrotne różnicowanie)")
+plot(pacf(reszty4d, plot = F), main = "PACF dla reszt czwartej części szeregu (jednokrotne różnicowanie)")
+```
+
+Wartości funkcji acf zanikają szybciej do zera. Oznacza to, że analiza stacjonarności reszt korzystając z funkcji "acf" sugeruje stacjonarność reszt (wyodrębnionych przy pomocy różnicowania).
+
+Sprawdzimy jeszcze stacjonarność reszt testem "kpss.test".
+
+```{r}
+kpss.test(reszty4d)
+```
+
+p-value > 0.05, więc nie ma podstaw do odrzucenia hipotezy o stacjonarności reszt wyodrębnionych przy pomocy jednokrotnego różnicowania. W tym przypadku kpss test oraz analiza funkcji "acf" daje takie same wnioski, zatem ostatecznie uznajemy szereg reszt za stacjonarny.
+
+# Dobór modelu i prognoza
+
+Do prognozy wykorzystamy ostatnie 3 lata czwartej części szeregu. Wariancja szeregu w tym okresie może wydawać się niejednorodna, ale po przeprowadzeniu transformacji na szeregu nie było widać znaczących zmian, a model dobrany do danych po transformacji dopasowywał gorszy model, niż ten przed.
+
+Podziału na zbiór uczący i testowy dokonamy przy pomocy funkcji "window" z pakietu "stats".
+
+Część ucząca zaczyna się na początku 2017 roku, a część testowa zaczyna się od października 2019 roku i trwa do 2020 roku, kiedy w danych pojawia się gwałtowny spadek cen akcji prawdopodobnie spowodowany wybuchem pandemii COVID-19.
+
+```{r}
+tskolka4.uczacy <- window(tskolka4, start = c(2017, 1), end = c(2019, 195))
+tskolka4.testowy <- window(tskolka4, start = c(2019, 196), end = c(2020, 1))
+
+autoplot(tskolka4.uczacy) + geom_line(data = tskolka4.testowy, color = "purple") + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Szereg z podziałem na część uczącą i testową")
+```
+
+Do doboru modelu użyjemy funkcji "auto.arima" z pakietu "forecast", która automatycznie dobierze odpowiedni model. 
+
+Na potrzebę doboru modelu parametr "seasonal" ustawiamy na false, czyli uznajemy, że w danych nie występuje sezonowość. Przetestowaliśmy opcję z parametrem true, ale otrzymany model nie dawał satysfakcjonujących wyników.
+
+```{r}
+arima.optymalny <- auto.arima(tskolka4.uczacy, seasonal = F)
+arima.optymalny
+```
+
+Otrzymujemy model ARIMA(3,1,2) z dryfem (trendem).
+
+Przeanalizujemy jeszcze reszty w postaci różnic predykcji jednokrokowych i faktycznych wartości przy pomocy funkcji "tsdiag" z pakietu "stats", która zwraca wykres ustandaryzowanych reszt, wykres funkcji "acf" oraz p-values testu Ljunga-Boxa dla kolejnych opóźnień.
+
+```{r}
+tsdiag(arima.optymalny)
+```
+
+Wykres reszt nie wykazuje regularności. Wartości funkcji acf nie wykraczają poza przedział ufności co świadczy o braku istotnej autokorelacji, a p-values dla testu Ljunga-Boxa, który bada istotność korelacji, pokazuje to samo.
+
+Sprawdzimy czy reszty mają rozkład normalny przy pomocy testu Shapiro-Wilka oraz stworzymy histogram reszt.
+
+```{r}
+hist(arima.optymalny$residuals, main = "Histogram reszt modelu ARIMA(3,1,2) z dryfem", xlab = "Wartości", ylab = "Częstotliwość")
+shapiro.test(arima.optymalny$residuals)
+```
+
+Histogram może sugerować rozkład normalny reszt, ale w teście Shapiro-Wilka odrzucamy hipotezę o normalności reszt. Ostatecznie uznajemy, że reszty nie mają rozkładu zbliżonego do rozkładu normalnego.
+
+Przeprowadzimy prognozę dla dobranego modelu przy pomocy funkcji "forecast" oraz prognozę z wykorzystaniem funkcji "rwf" z pakietu "forecast". Funkcja "rwf" jest jedną z naiwnych metod prognozy odpowiadających prognozowaniu modelu ARIMA(0,1,0) z dryfem. 
+
+Istnieją inne naiwne metody prognozowania takie jak "naive" (prognozujemy, że wartość będzie stała, równa ostatniej wartości szeregu), "snaive" (prognoza odpowiadająca modelowi ARIMA(0,0,0)(0,1,0)[s], gdzie s to okres sezonowości) oraz "meanf" (prognozujemy, że przyszłe wartości będą średnią wartością całego szeregu), lecz sprawdziliśmy, że te metody, nie są optymalne dla danych dotyczących cen akcji firmy Coca-Cola w rozważanym okresie, dlatego z nich rezygnujemy.
+
+```{r}
+n <- length(tskolka4.testowy)
+
+prog <- forecast(arima.optymalny, h = n)
+autoplot(prog) + geom_line(data = tskolka4.testowy ,aes(x = time(tskolka4.testowy), y = tskolka4.testowy), color = "red") + xlab("Lata") + ylab("Cena zamknięcia (USD)") + ggtitle("Prognoza dla modelu ARIMA(3,1,2) z dryfem")
+
+prog1 <- rwf(tskolka4.uczacy, h = n, drift = T)
+autoplot(prog1) + geom_line(data = tskolka4.testowy,aes(x = time(tskolka4.testowy), y = tskolka4.testowy), color = "red") + xlab("Lata") + ylab("Cena zamknięcia (USD)")+ ggtitle("Prognoza dla metody naiwnej z dryfem")
+```
+
+Czerwoną linią zaznaczone są rzeczywiste wartości ze zbioru testowego. Dodatkowo na wykresie możemy zauważyć 3 kluczowe elementy prognozy. 
+
+Granatowa linia reprezentuje prognozę dokonaną przez program.
+
+Ciemnoniebieski obszar na wykresie to przedział predykcyjny na poziomie 80%, konstruowany przy odpowiednich założeniach odnośnie modelu. Sugeruje on, że na 80% przyszłe wartości znajdą się w tym przedziale.
+
+Jasnoniebieski obszar na wykresie to przedział predykcyjny na poziomie 95%, konstruowany przy odpowiednich założeniach odnośnie modelu. Sugeruje on, że na 95% przyszłe wartości znajdą się w tym przedziale.
+
+## Ocena modelu
+
+Pomimo gwałtownego spadku cen na początku okresu predykcji, rzeczywiste wartości przewidywanego szeregu mieszczą się w przedziale predykcyjnym na poziomie 95%. W późniejszym okresie predykcja jest już dokładniejsza i wartości te mieszczą się w przedziale predykcyjnym na poziomie 80%.
+
+Dodatkowo ocenimy dokładność predykcji przy pomocy funkcji "accuracy" z pakietu "forecast". Zwraca ona miary dopasowania jednokrokowych predykcji oraz miary dopasowania względem zbioru testowego.
+
+```{r}
+cat("Miary dopasowania dla modelu ARIMA(3,1,2)\n")
+accuracy(prog, tskolka4.testowy)
+
+cat("\nMiary dopasowania dla metody naiwnej z dryfem\n")
+accuracy(prog1, tskolka4.testowy)
+```
+
+Analizując miary dopasowania, nie możemy jednoznacznie stwierdzić która z metod predykcji jest lepsza.
+Wartości miar w obu przypadkach nieznacznie różnią się od siebie oraz są stosunkowo bliskie zeru, co świadczy o dokładności predykcji.
+
+Możemy dodatkowo sprawdzić, czy szereg reszt jednokrokowej prognozy (błędów prognozy) metody naiwnej zachowuje się jak biały szum. Analizę dla modelu ARIMA(3,1,2) przeprowadziliśmy wcześniej, przy okazji dobierania modelu.
+
+```{r}
+autoplot(prog1$residuals) + xlab("Lata") + ylab("Wartości") + ggtitle("Błędy prognozy metody naiwnej z dryfem") + ylim(-4.4,3.5)
+```
+
+Na wykresie reszty obu predykcji wyglądają bardzo podobnie. Nie zauważamy na nich trendu, ani sezonowości.
+
+Przeanalizujmy funkcje "acf" i "pacf. Nie powinny one wskazywać na korelacje. 
+
+Sprawdzimy teraz jak zachowują się funkcje "acf" i "pacf" dla reszt metody naiwnej z dryfem. Jako, że metoda ta prognozuje wartości na podstawie przeszłych wartości dlatego pierwsza wartość reszt to NA.
+
+```{r}
+prog1$residuals <- prog1$residuals[-1]
+plot(acf(prog1$residuals, plot = F), main = "ACF dla reszt metody naiwnej z dryfem")
+plot(pacf(prog1$residuals, plot = F), main = "PACF dla reszt metody naiwnej z dryfem")
+```
+
+Wartości funkcji acf dla opóźnień równych 2 i 22 oraz wartości funkcji pacf dla opóźnień 2 i 6 nie mieszczą się w przedziale ufności.
+
+Przeprowadzimy jeszcze test Ljunga-Boxa dla opóźnień 2, 6, 9 oraz 22 dla których wartości funkcji "acf" przekraczają lub znajdują się na granicy przedziału ufności, aby upewnić się o braku losowości reszt.
+
+```{r}
+Box.test(prog1$residuals, lag = 2, type = "Ljung-Box")
+Box.test(prog1$residuals, lag = 6, type = "Ljung-Box")
+Box.test(prog1$residuals, lag = 9, type = "Ljung-Box")
+Box.test(prog1$residuals, lag = 22, type = "Ljung-Box")
+```
+
+Odrzucamy zatem hipotezę o losowości reszt dla metody naiwnej z dryfem, ponieważ uzyskane wyniki wskazują na pozostałości korelacji czasowej w błędach prognozy.
+
+Mimo to, dla pełności zbadamy, czy reszty mają rozkład zbliżony do normalnego.
+
+```{r}
+shapiro.test(prog1$residuals)
+```
+
+W odrzucamy hipotezę o normalności reszt.
+
+Zatem biorąc dodatkowo pod uwagę analizę reszt, możemy stwierdzić, że prognoza przy pomocy modelu ARIMA(3,1,2) jest lepsza, patrząc na analizę funkcji "acf"i "pacf" oraz test Ljunga-Boxa.
+
+Możemy też porównać prognozowane wartości, ze zbiorem testowym.
+
+```{r}
+res.prog  <- prog$mean - tskolka4.testowy
+autoplot(res.prog, main = "Reszty - prognoza vs zbiór testowy (ARIMA(3,1,2))") + xlab("Czas") + ylab("Wartości reszt") + ylim(-3,2.5)
+res.prog1 <- prog1$mean - tskolka4.testowy
+autoplot(res.prog1, main = "Reszty - prognoza vs zbiór testowy (Metoda naiwna)") + xlab("Czas") + ylab("Wartości reszt") + ylim(-3,2.5)
+```
+
+Takie porównanie pozwala określić jak zachowują się prognozowane wartości w stosunku do rzeczywistych. Widzimy, że reszty w obu przypadkach zachowują się podobnie, dla prognozy przy pomocy modelu ARIMA(3,1,2) reszty przyjmują wyższe wartości, lecz jest to zmiana na poziomie jednej dziesiątej co przy oryginalnych danych (wartości od 50 do 60) nie oznacza dużego błędu. 
+
+Takie porównanie pokazuje również kiedy prognozowane wartości są większe od rzeczywistych (reszty są wtedy dodatnie), kiedy mniejsze (reszty są wtedy ujemne), a kiedy prognoza przyjmuje zbliżone wartości (reszty są wtedy bliskie zeru).
+
+
+## Mocne i słabe strony modelu
+
+Mocne strony:
+
++ Model poprawnie prognozuje wzrost cen akcji,
+
++ Węższy przedział predykcyjny w stosunku do metody naiwnej,
+
++ Większość prognozowanego szeregu mieści się w przedziale predykcyjnym na poziomie 80%.
+
+Słabe strony:
+
+- Model nie potrafił przewidzieć spadku prawdopodobnie związanego z pandemią
+
+- Model nie odzwierciedla wahań (predykcja to w miarę prosta linia),
+
+- Początek prognozowanego szeregu znajduje się na granicy przedziału (w jednym momencie delikatnie wystaje) predykcyjnego na poziomie 95%.
+

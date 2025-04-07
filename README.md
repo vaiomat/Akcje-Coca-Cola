@@ -33,7 +33,7 @@ Z uwagi na specyfikę rynku, dane obejmują jedynie sesje giełdowe (poniedział
 ---
 
 ### 📁 Struktura plików:
-- `Coca_Cola_forecast.rmd` – główny skrypt z analizą i prognozą
+- `Coca_Cola_forecast.rmd` – skrypt z analizą i prognozą
 - `COCO COLA.csv` – zbiór danych (jeśli dołączony)
 
 ---
@@ -79,7 +79,7 @@ Due to the nature of the stock market, the data includes only trading days (Mond
 ---
 
 ### 📁 File Structure:
-- `Coca_Cola_forecast.rmd` – main R Markdown script with analysis and forecasting  
+- `Coca_Cola_forecast.rmd` – R Markdown script with analysis and forecasting  
 - `COCO COLA.csv` – dataset file (if included)
 
 ---

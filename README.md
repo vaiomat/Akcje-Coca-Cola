@@ -16,7 +16,7 @@ Z uwagi na specyfikę rynku, dane obejmują jedynie sesje giełdowe (poniedział
 
 ### ⚙️ Technologie:
 - **Język R**
-- Pakiety: `forecast`, `tseries`, `fpp3`
+- Pakiety: `forecast`, `tseries`, `fpp3`, `ggplot2`
 
 ---
 
@@ -62,7 +62,7 @@ Due to the nature of the stock market, the data includes only trading days (Mond
 
 ### ⚙️ Technologies:
 - **R programming language**  
-- Packages: `forecast`, `tseries`, `fpp3`
+- Packages: `forecast`, `tseries`, `fpp3`, `ggplot2`
 
 ---
 
